@@ -98,6 +98,7 @@ var (
 	flagHostname = flag.String("hostname", "127.0.0.1", "Host to connect to")
 	flagNoVerify = flag.Bool("no-verify", false, "No TLS verify")
 	flagPort     = flag.String("port", "443", "Port to connect to")
+	flagScheme   = flag.String("scheme", "wss", "Scheme to use")
 )
 
 func dialer(ctx context.Context, testname string) (*websocket.Conn, error) {
@@ -109,7 +110,7 @@ func dialer(ctx context.Context, testname string) (*websocket.Conn, error) {
 		WriteBufferSize: maxMessageSize,
 	}
 	URL := url.URL{
-		Scheme: "wss",
+		Scheme: *flagScheme,
 		Host:   *flagHostname + ":" + *flagPort,
 	}
 	URL.Path = "/ndt/v7/" + testname
