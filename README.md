@@ -5,29 +5,23 @@ functionality implemented by [better clients](
 https://github.com/m-lab/ndt7-client-go). It's used as a benchmark to make
 sure the production server still works with minimal clients.
 
-To build, make sure you have Go >= 1.11 installed and then run
+You need Go >= 1.13 and Python >= 3.7. To run a ndt7 test, type:
 
 ```bash
-./build.bash
+go run main.go | ./ndt7-client-aux
 ```
 
-The high level interface to perform a test is
+The `./ndt7-clien-aux` script just pretty prints the JSON output emitted by
+the `main.go` ndt7 implementation. For more fine grained control, try:
 
 ```bash
-./ndt7-client
+go run main.go -help
 ```
 
 To run a TLS test towards a test server deployed at `${address}` try:
 
 ```bash
 sudo ./enable-bbr.bash
-./ndt7-client-bin -no-verify -hostname ${address} | ./ndt7-client-aux
+go run main.go -no-verify -dowload https://${hostname}/ndt/v7/download \
+                          -upload https://${hostname}/ndt/v7/upload
 ```
-
-For more fine grained control, try
-
-```bash
-./ndt7-client-bin -h
-```
-
-And follow the instructions printed on the screen.

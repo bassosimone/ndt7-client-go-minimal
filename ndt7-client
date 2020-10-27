@@ -1,6 +1,0 @@
-#!/bin/bash
-set -e
-topdir=$(cd $(dirname $0) && pwd -P)
-fqdn=$(curl -s https://locate.measurementlab.net/ndt7 | jq -r '.fqdn')
-echo "using $fqdn"
-$topdir/ndt7-client-bin -hostname $fqdn | $topdir/ndt7-client-aux

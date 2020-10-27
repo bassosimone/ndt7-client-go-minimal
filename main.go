@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"io"
+	"io/ioutil"
 	"net/http"
-	"net/url"
 	"os"
 	"time"
 
@@ -25,7 +26,7 @@ const (
 )
 
 func emitAppInfo(start time.Time, total int64, testname string) {
-	fmt.Printf(`{"AppInfo":{"NumBytes":%d,"ElapsedTime":%d},"Test":"%s"}`+"\n",
+	fmt.Printf(`{"AppInfo":{"NumBytes":%d,"ElapsedTime":%d},"Test":"%s"}`+"\n\n",
 		total, time.Since(start)/time.Microsecond, testname)
 }
 
@@ -105,13 +106,12 @@ func uploadTest(ctx context.Context, conn *websocket.Conn) error {
 }
 
 var (
-	flagHostname = flag.String("hostname", "127.0.0.1", "Host to connect to")
+	flagDownload = flag.String("download", "", "Download URL")
 	flagNoVerify = flag.Bool("no-verify", false, "No TLS verify")
-	flagPort     = flag.String("port", "443", "Port to connect to")
-	flagScheme   = flag.String("scheme", "wss", "Scheme to use")
+	flagUpload   = flag.String("upload", "", "Upload URL")
 )
 
-func dialer(ctx context.Context, testname string) (*websocket.Conn, error) {
+func dialer(ctx context.Context, URL string) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: *flagNoVerify,
@@ -119,24 +119,59 @@ func dialer(ctx context.Context, testname string) (*websocket.Conn, error) {
 		ReadBufferSize:  maxMessageSize,
 		WriteBufferSize: maxMessageSize,
 	}
-	URL := url.URL{
-		Scheme: *flagScheme,
-		Host:   *flagHostname + ":" + *flagPort,
-	}
-	URL.Path = "/ndt/v7/" + testname
 	headers := http.Header{}
 	headers.Add("Sec-WebSocket-Protocol", "net.measurementlab.ndt.v7")
-	conn, _, err := dialer.DialContext(ctx, URL.String(), headers)
+	conn, _, err := dialer.DialContext(ctx, URL, headers)
 	return conn, err
 }
 
 func warnx(err error, testname string) {
-	fmt.Printf(`{"Failure":"%s","Test":"%s"}`+"\n", err.Error(), testname)
+	fmt.Printf(`{"Failure":"%s","Test":"%s"}`+"\n\n", err.Error(), testname)
 }
 
 func errx(exitcode int, err error, testname string) {
 	warnx(err, testname)
 	os.Exit(exitcode)
+}
+
+const (
+	locateDownloadURL = "wss:///ndt/v7/download"
+	locateUploadURL   = "wss:///ndt/v7/upload"
+)
+
+type locateResponseResult struct {
+	URLs map[string]string `json:"urls"`
+}
+
+type locateResponse struct {
+	Results []locateResponseResult `json:"results"`
+}
+
+func locate(ctx context.Context) error {
+	// If you don't specify any option then we use locate. Otherwise we assume
+	// you're testing locally and we only do what you asked us to do.
+	if *flagDownload != "" || *flagUpload != "" {
+		return nil
+	}
+	resp, err := http.Get("https://locate.measurementlab.net/v2/nearest/ndt/ndt7")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, err := ioutil.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	var locate locateResponse
+	if err := json.Unmarshal(data, &locate); err != nil {
+		return err
+	}
+	if len(locate.Results) < 1 {
+		return errors.New("too few entries")
+	}
+	*flagDownload = locate.Results[0].URLs[locateDownloadURL]
+	*flagUpload = locate.Results[0].URLs[locateUploadURL]
+	return nil
 }
 
 func main() {
@@ -146,13 +181,16 @@ func main() {
 		conn *websocket.Conn
 		err  error
 	)
-	if conn, err = dialer(ctx, "download"); err != nil {
-		errx(1, err, "donwload")
+	if err = locate(ctx); err != nil {
+		errx(1, err, "locate")
+	}
+	if conn, err = dialer(ctx, *flagDownload); err != nil {
+		errx(1, err, "download")
 	}
 	if err = downloadTest(ctx, conn); err != nil {
 		warnx(err, "download")
 	}
-	if conn, err = dialer(ctx, "upload"); err != nil {
+	if conn, err = dialer(ctx, *flagUpload); err != nil {
 		errx(1, err, "upload")
 	}
 	if err = uploadTest(ctx, conn); err != nil {
