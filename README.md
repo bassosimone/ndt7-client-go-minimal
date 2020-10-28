@@ -22,6 +22,6 @@ To run a TLS test towards a test server deployed at `${address}` try:
 
 ```bash
 sudo ./enable-bbr.bash
-go run main.go -no-verify -dowload https://${hostname}/ndt/v7/download \
-                          -upload https://${hostname}/ndt/v7/upload
+go run main.go -no-verify -dowload wss://${hostname}/ndt/v7/download \
+                          -upload wss://${hostname}/ndt/v7/upload
 ```

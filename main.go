@@ -23,7 +23,84 @@ const (
 	maxRuntime           = 10 * time.Second
 	measureInterval      = 250 * time.Millisecond
 	fractionForScaling   = 16
+
+	roundTripMaxMessageSize = 1 << 17
+	roundTripRuntime        = 3 * time.Second
 )
+
+type roundTripRequest struct {
+	RTTVar float64       // RTT variance (μs)
+	SRTT   float64       // smoothed RTT (μs)
+	ST     time.Duration // sender time (μs)
+}
+
+func (rrr roundTripRequest) String(elapsed time.Duration) string {
+	return fmt.Sprintf(
+		`{"AppInfo":{"SRTT":%f,"RTTVar":%f,"ElapsedTime":%d},"Test":"%s"}`,
+		rrr.SRTT, rrr.RTTVar, elapsed, "roundtrip")
+}
+
+type roundTripReply struct {
+	STE time.Duration // sender time echo (μs)
+
+	// TODO(bassosimone): we may want to use these fields to also
+	// estimate the one-way delay using a uTP-like methodology
+	RRT time.Duration // receiver recv time (μs)
+	RST time.Duration // receiver send time (μs)
+}
+
+type roundTripRecvInfo struct {
+	msg      roundTripRequest
+	recvTime time.Time
+}
+
+func roundTripRecv(conn *websocket.Conn) (*roundTripRecvInfo, error) {
+	kind, reader, err := conn.NextReader()
+	if err != nil {
+		return nil, err
+	}
+	recvTime := time.Now()
+	if kind != websocket.TextMessage {
+		return nil, errors.New("unexpected message type")
+	}
+	data, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	var info roundTripRecvInfo
+	if err := json.Unmarshal(data, &info.msg); err != nil {
+		return nil, err
+	}
+	info.recvTime = recvTime
+	return &info, nil
+}
+
+func roundTripTest(ctx context.Context, conn *websocket.Conn) error {
+	start := time.Now()
+	if err := conn.SetReadDeadline(start.Add(roundTripRuntime)); err != nil {
+		return err
+	}
+	if err := conn.SetWriteDeadline(start.Add(roundTripRuntime)); err != nil {
+		return err
+	}
+	conn.SetReadLimit(roundTripMaxMessageSize)
+	for ctx.Err() == nil {
+		info, err := roundTripRecv(conn)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\n\n", info.msg.String(info.recvTime.Sub(start)))
+		reply := roundTripReply{
+			RRT: info.recvTime.Sub(start) / time.Microsecond,
+			RST: time.Since(start) / time.Microsecond,
+			STE: info.msg.ST,
+		}
+		if err := conn.WriteJSON(reply); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func emitAppInfo(start time.Time, total int64, testname string) {
 	fmt.Printf(`{"AppInfo":{"NumBytes":%d,"ElapsedTime":%d},"Test":"%s"}`+"\n\n",
@@ -109,6 +186,8 @@ var (
 	flagDownload = flag.String("download", "", "Download URL")
 	flagNoVerify = flag.Bool("no-verify", false, "No TLS verify")
 	flagUpload   = flag.String("upload", "", "Upload URL")
+
+	flagRoundTrip = flag.String("round-trip", "", "Round trip URL")
 )
 
 func dialer(ctx context.Context, URL string) (*websocket.Conn, error) {
@@ -150,7 +229,7 @@ type locateResponse struct {
 func locate(ctx context.Context) error {
 	// If you don't specify any option then we use locate. Otherwise we assume
 	// you're testing locally and we only do what you asked us to do.
-	if *flagDownload != "" || *flagUpload != "" {
+	if *flagRoundTrip != "" || *flagDownload != "" || *flagUpload != "" {
 		return nil
 	}
 	resp, err := http.Get("https://locate.measurementlab.net/v2/nearest/ndt/ndt7")
@@ -169,6 +248,7 @@ func locate(ctx context.Context) error {
 	if len(locate.Results) < 1 {
 		return errors.New("too few entries")
 	}
+	// TODO(bassosimone): support flagRoundTrip here when locate v2 is ready
 	*flagDownload = locate.Results[0].URLs[locateDownloadURL]
 	*flagUpload = locate.Results[0].URLs[locateUploadURL]
 	return nil
@@ -184,16 +264,28 @@ func main() {
 	if err = locate(ctx); err != nil {
 		errx(1, err, "locate")
 	}
-	if conn, err = dialer(ctx, *flagDownload); err != nil {
-		errx(1, err, "download")
+	if *flagRoundTrip != "" {
+		if conn, err = dialer(ctx, *flagRoundTrip); err != nil {
+			errx(1, err, "roundtrip")
+		}
+		if err = roundTripTest(ctx, conn); err != nil {
+			warnx(err, "roundtrip")
+		}
 	}
-	if err = downloadTest(ctx, conn); err != nil {
-		warnx(err, "download")
+	if *flagDownload != "" {
+		if conn, err = dialer(ctx, *flagDownload); err != nil {
+			errx(1, err, "download")
+		}
+		if err = downloadTest(ctx, conn); err != nil {
+			warnx(err, "download")
+		}
 	}
-	if conn, err = dialer(ctx, *flagUpload); err != nil {
-		errx(1, err, "upload")
-	}
-	if err = uploadTest(ctx, conn); err != nil {
-		warnx(err, "upload")
+	if *flagUpload != "" {
+		if conn, err = dialer(ctx, *flagUpload); err != nil {
+			errx(1, err, "upload")
+		}
+		if err = uploadTest(ctx, conn); err != nil {
+			warnx(err, "upload")
+		}
 	}
 }
