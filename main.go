@@ -42,11 +42,8 @@ func (rrr roundTripRequest) String(elapsed time.Duration) string {
 
 type roundTripReply struct {
 	STE time.Duration // sender time echo (μs)
-
-	// TODO(bassosimone): we may want to use these fields to also
-	// estimate the one-way delay using a uTP-like methodology
-	RRT time.Duration // receiver recv time (μs)
-	RST time.Duration // receiver send time (μs)
+	STD time.Duration // sender time difference (μs)
+	RT  time.Duration // receiver time (μs)
 }
 
 type roundTripRecvInfo struct {
@@ -91,9 +88,9 @@ func roundTripTest(ctx context.Context, conn *websocket.Conn) error {
 		}
 		fmt.Printf("%s\n\n", info.msg.String(info.recvTime.Sub(start)))
 		reply := roundTripReply{
-			RRT: info.recvTime.Sub(start) / time.Microsecond,
-			RST: time.Since(start) / time.Microsecond,
 			STE: info.msg.ST,
+			STD: info.recvTime.Sub(start)/time.Microsecond - info.msg.ST,
+			RT:  time.Since(start) / time.Microsecond,
 		}
 		if err := conn.WriteJSON(reply); err != nil {
 			return err
